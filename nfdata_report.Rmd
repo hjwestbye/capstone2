@@ -1,0 +1,1466 @@
+---
+title: "Edx Capstone - Choose your own  \nTreatment Response Prediction in Behavioral Health"
+author: "Hans Jacob Westbye"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document:
+    df_print: kable
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+    highlight: pygments
+    latex_engine: xelatex
+mainfont: Arial
+documentclass: report
+geometry:
+- top=25mm
+- bottom=25mm
+- left=20mm
+- right=20mm
+- heightrounded
+---
+
+```{r setup, include=FALSE}
+if(!require(knitr)) install.packages("knitr", repos = "http://cran.us.r-project.org")
+opts_chunk$set(echo=TRUE, cache=TRUE, autodep=TRUE, cache.comments=FALSE,
+               message=FALSE, warning=FALSE)
+
+```
+
+# Introduction
+
+Mental health problems are an enormous personal burden and a threat to global health systems. The increase in demand for mental health services far outweighs the growth in supply, and with traditional approaches and treatment processes this gap will never be closed. New approaches to mental health treatment and health system structures are urgently needed. One such novel approach, that already is implemented, is the Norse Feedback system, developed in Norway by researchers, treatment providers and patients in a collaborative process. In the US this feedback system is distributed and implemented by Mirah, Inc. 
+
+The Norwegian Outcome Response System for Evaluation (NORSE) is a second generation Routine Outcome Monitoring innovation, with a dynamic clinical feedback system, developed at Førde Hospital Trust. NORSE has advanced significantly on existing methodologies in that the system A) actively learns from, and B) adapts to, the individual patient´s feedback, and C) instantaneously personalizes the system to individual profiles of suffering and resources. A consequence of the computer adaptive nature of the feedback system is that patients are only asked to report on items that are relevant to them, this leads to differing length of responses in the dataset and missing values for many items. Implications of missing data and a strategy for handling this is discussed in Chapter 2: Handling Missing Data  
+
+For this project a dataset containing patient reported data from the US for a 5 year period has been made available. The data is collected using the first version of the Norse Feedback system, and several subsequent versions have rendered many items obsolete. The dataset used in this research only contains the items that still are relevant.
+
+This report serves a two-fold purpose, first as the final submission in the Edx Data Science course, and second as an exploration of the data to provide new knowledge and foundation for further research on treatment response in mental health. The dataset has been anonymized and during this process every patient was given a unique ID for each year. This entails that the unique patients in the dataset could be in the middle of a treatment series spanning several years, and that sessions from different years will be stored with different patient IDs. Menaing for this analysis that the three sessions I use to predict outcome not necessarily are the three first sessions of a treatment series. In clinical practice this is not an unknown situation as patients can change therapists during treatment, or the feedback system can be introduced in the middle of a treatment series.   
+
+## The Problem
+
+The problem I will explore is defined by the research group developing the Norse Feedback system. Treatment providers often face unique challenges with individual patients, and as a group effect of therapy is only about 50%. It would be valuable for therapists to get an indication about the effect of therapy for an individual patient as early as possible, and even valuable more to get feedback on which features mostly impacted the prediction of lack of effect of therapy. Given such information, individualization of therapy could be possible, e.g. through conversations with the patient about what the treatment response predictions mean, and how therapist and patient could collaborate to improve treatment outcomes. Two main research questions have been identified:
+
+* Can treatment response for an individual patient be predicted after three session?
+
+* Which features most often predict poor treatment response?
+
+Prediction of human behavior is notoriously difficult and expectations for the results from this project are limited. Any improvement in prediction accuracy beyond random prediction based on population averages would add value for treatment providers. 
+
+## Clinical Usability Requirements
+
+An important feature for a machine learning model for a clinical problem is interpretability. Therapists must be able to understand the logic behind predictions and the features driving lack of treatment response. My approach to exploring the research questions given the problem description is detailed in chapter 2: Methods and Analysis.
+
+The raw dataset is not labeled. The researchers and therapists from Norse Feedback have advised using improvement on a single item from the dataset as outcome label. This is a crucial part of this analysis and the details concerning thresholds and outcome labeling is detailed in Chapter 3: Data Preprocessing. 
+
+## Machine Learning Algorithms
+
+Given the research questions and the clinical usability requirements I will proceed using only supervised shallow machine learning (ML) algorithms. Deliberations around choice of ML algorithms are detailed in Chapter 2: Methods and analysis, and results from the ML models are reported in Chapter 4: Results.  
+
+## Executive Summary
+
+This report summarizes the exploration of a dataset with patient reported data on 80 items in the Norse Feedback system for mental health. After data pre-processing, including labeling of the unlabeled dataset, 3490 patients and 29 items were included for further analysis and model training. With the addition of age and sex the total number of features is 31. Supervised shallow ML algorithms were chosen for model training given the clinical requirements included in the problem description. A major challenge with the dataset was the sparsity and variance in patient reported data, leading to a large number of NAs in the dataset. A basic model utilizing logistic regression with imputation of 0s for missing data was trained. However, this model have limited usability without further adaptation, and do not answer well on the problem description. Gradient boosting classification tree algorithms are popular, efficient and accurate for classification problems. The `XGBoost` library implements gradient boosting tree with some improvements versus former implementations of this algorithm and can also handle missing data. After splitting the dataset and some feature engineering the final model was trained on 2653 patients and 91 features and validated in 664 patients. The `XGBoost` model predicted lack of treatment effect with an accuracy of 0.7139 in the validation set, giving a ROC AUC of 0.7690.    
+
+# Methods and Analysis
+In this chapter I will go through the process of initial preparation and exploration of the dataset. The methods and algorithms I intend to utilize are briefly described, as well as some key challenges with this dataset that I will need to handle during data pre-processing.  
+
+## Data preparation
+Load libraries needed for initial data preparation
+```{r warning=FALSE, message=FALSE}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(ggthemes)) install.packages("ggthemes", repos = "http://cran.us.r-project.org")
+if(!require(scales)) install.packages("scales", repos = "http://cran.us.r-project.org")
+if(!require(pander)) install.packages("pander", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+```
+
+I start with downloading and unzipping the dataset
+```{r}
+# Download and unzip the raw data from github
+dl <- tempfile()
+download.file("https://github.com/hjwestbye/capstone2/raw/main/data_raw.zip", dl)
+
+
+nfdata_raw <- fread(unzip(dl, "data_raw.csv"), 
+                    col.names = c("year", "patId", "age", "sex", 
+                                  "session", "itemName", "rating", 
+                                  "question", "n_sessions"))
+```
+
+A first look at the dataset to inspect dimensions and structure
+```{r}
+# Inspect the raw data
+dim(nfdata_raw)
+str(nfdata_raw)
+```
+The question column seems to include html headers that I will need to clean up.
+
+Inspecting the first 10 rows of the dataset without the messy questions column.
+```{r}
+# Inspect the 10 first rows (excluding question/text column)
+pander(nfdata_raw[1:10,-8])
+```
+
+Exploring total number of patients and items in the dataset
+```{r}
+# Unique patients in dataset
+length(unique((nfdata_raw$patId)))
+
+# Number of features
+length(unique((nfdata_raw$itemName)))
+```
+
+I want to tidy up the dataset and create a dataframe to store the item information.
+```{r}
+item_df <- nfdata_raw %>% distinct(itemName, .keep_all = TRUE) %>% select(itemName, question)
+```
+
+To clean up the question column I need to take a closer look.
+```{r}
+pander(item_df[1,])
+```
+
+The question column contains html headers and information I do not need. The central information is the question text which is located at the start of the string and ends with a punctuation mark. I extract the question string using `string_extract_all` and a regex. The questions are added to the item dataframe, items are given a unique item ID, and the itemIds are formated as factors.
+```{r}
+question_list <- item_df$question %>% str_extract_all("^(.+)\\.")
+
+# Convert questions from list to dataframe
+question_df <- data.frame(t(data.frame(t(sapply(question_list,c)))))
+
+# Update item dataframe with question texts
+item_df <- item_df %>% mutate(question = question_df[,1]) %>% 
+  mutate(itemId = row_number()) %>%
+  select(itemId, itemName, question)
+
+# Convert itemId to factor
+item_df$itemId <- as.factor(item_df$itemId)
+
+head(item_df)
+```
+
+For some items the questions are missing. I have received these missing questions from the Norse Feedback research team and add them manually.
+```{r}
+item_df[2,3] <- "I would like my therapist to use less/more techniques and exersises"
+item_df[3,3] <- "I feel that my therapist accepts me as a person"
+item_df[18,3] <- "I feel that the therapist understands me and understands why I am in treatment now"
+item_df[19,3] <- "I would like my therapist to focus less/more on the relationship between us"
+item_df[21,3] <- "I would like my therapist to show their personality more/be more formal"
+item_df[22,3] <- "I have an understanding of how treatment is going to help me"
+item_df[23,3] <- "I would like my therapist to focus more on my feelings / more on my cognitions"
+item_df[25,3] <- "Now I understand what I need to do or work on to get better"
+
+pander(item_df)
+```
+
+I create a new dataframe to store the variables I want to use in the analysis, including the new itemId (and discard item names and questions).
+```{r}
+# Create nfdata dataframe
+nfdata <- nfdata_raw %>% left_join(item_df, by = "itemName") %>% 
+  select(patId, age, sex, session, itemId, rating)
+```
+
+Next, I create a dataframe for patients and assign each patient a number to replace the long unique patient ID.
+```{r}
+# Create patient dataframe
+patient_df <- nfdata_raw %>% distinct(patId, .keep_all = TRUE) %>% 
+  mutate(patN = row_number()) %>% 
+  select(patN, patId, age, sex, n_sessions)
+```
+
+As sessions are numbered by the total treatment series, but the dataset has unique patient IDs for each patient for each year, I am giving the sessions a new ranking to facilitate analysis. 
+```{r}
+# Rank sessions
+session_ranked <- nfdata_raw %>% 
+  group_by(patId) %>%
+  distinct(session, .keep_all = TRUE) %>%
+  mutate(session_rank = order(order(session))) %>% 
+  select(patId, session, session_rank) %>%
+  arrange(patId) %>%
+  ungroup()
+
+pander(tail(session_ranked, 50))
+```
+
+Finally, I update the nfdata dataframe with session ranks and patient numbers, convert variables, and inspect the number of unique patients in the final dataset and the dataset structure.
+
+```{r}
+# Update nfdata dataframe with session rank
+nfdata <- nfdata %>% 
+  left_join(session_ranked, by = c("patId" = "patId", "session" = "session")) %>%
+  arrange(patId)
+
+# Update nfdata with patient number and select features
+nfdata <- nfdata %>% left_join(patient_df %>% select(patId, patN, n_sessions), by = "patId") %>% 
+  select(patN, age, sex, session, session_rank, n_sessions, itemId, rating)
+
+# Convert variables
+str(nfdata)
+nfdata$rating <- as.numeric(nfdata$rating)
+nfdata$sex[nfdata$sex == ""] <- NA #Replace blanks with NAs
+nfdata$sex <- as.factor(nfdata$sex)
+
+length(unique(nfdata$patN))
+
+str(nfdata)
+```
+
+
+## Dataset Description and Exploration
+Data used in this research have been collected as part of implementation follow up for the research and innovation project. The data is collected in the US over a 5 year period and use of the feedback system have varied over time.
+
+```{r}
+# Reported items by year
+nfdata_raw %>% ggplot(aes(year)) + 
+  geom_histogram() +
+  ggtitle("Number of reported items by year", subtitle = "") +
+  ylab("Number of reported items") +
+  theme_hc()
+```
+
+The dataset used for this research contains multivariate time series data. Real world data introduces some complexity to the analysis. An example is between patient variance in patient feedback. Some patients have registered feedback every session, whilst others have only registered every second or third session. Additionally, patient IDs are reset every year meaning treatment series spanning more than one year are split to different patient IDs making it impossible to find the actual first sessions for several patients. Consequently, when I use the term "three first sessions" in this report I refer to the three first patient feedback reports for a given patient ID that not necessarily corresponds to the three first treatment sessions for a patient. 
+
+This dataset reflects how patient reported outcome measures are used in real situations. Both patients and clinicians have preferences regarding frequency of reporting. This adds variance to the models we want to train, but the models will be more usable as reflections of the real situation.
+
+The dataset contains time series data for individual patients over several sessions in a long/tidy format (each item observation is one row). This is the standard for data frames, but to analyze the treatment effect of each patient over time I need to transform the data into a wide format where each patient is on one row, and all the individual session responses are in columns. This process is described in Chapter 3: Data Pre-processing. 
+
+Visualization of the distribution of patients by the total number of sessions:
+```{r}
+# Plot distributions of sessions per patient
+patient_df %>% ggplot(aes(n_sessions)) + 
+  geom_histogram(binwidth = 1, color = "white") +
+  ggtitle("Patients by total number of sessions", subtitle = "") +
+  ylab("Number of patients") +
+  xlab("Total number of sessions") +
+  theme_hc()
+```
+
+The average number of sessions per patient:
+```{r}
+# Mean number of sessions
+mean(patient_df$n_sessions)
+
+# Standard deviation of number of sessions
+sd(patient_df$n_sessions)
+```
+Most patients in the dataset have less that 10 reports/sessions. The variance is quite high, and as we can see some patient have treatment series with between 30 and 50 reports/sessions. 
+
+The dataset is in a long format with the following variables:
+```{r}
+# Inspect nf_data structure
+glimpse(nfdata)
+```
+
+The total number of patients and items in itemId:
+```{r}
+# Inspect number of items in dataset
+length(unique((nfdata$itemId)))
+
+# Inspect number of patients in dataset
+length(unique((nfdata$patN)))
+```
+Of the 29 items in itemID 25 are scored on a 1-7 likert scale. Four items are centered around 0 with a scale from -5 to 5. These items are: 2, 19, 21 and 23. Some items have a reversed score with 7 being the best response. These are items 3, 16, 18, 22 and 25. 
+
+
+Patients age distribution:
+```{r}
+# Age distribution
+nfdata %>% ggplot(aes(age)) + 
+  geom_histogram(binwidth = 1, color = "white") +
+  ggtitle("Age distribution of patients in dataset", subtitle = "") +
+  ylab("Number of patients") +
+  theme_hc()
+```
+
+Patients are of all ages but the number is declining with increasing age.  
+
+Gender distribution of patients:
+```{r gender distribution, fig.height = 3, fig.width = 6}
+# Gender distribution
+nfdata %>% distinct(patN, .keep_all = TRUE) %>%
+  ggplot(aes(sex, fill = sex)) + 
+  geom_bar() +
+  ggtitle("Gender distribution of patients in dataset", subtitle = "") +
+  scale_y_continuous(labels = comma) +
+  ylab("Number of patients") +
+  theme_hc()
+```
+
+Females are twice as prevalent as males. A few patients are characterized as "other" sex, and there are quite a few missing values.
+
+Distribution of reports on individual items:
+```{r}
+# Item report distribution
+nfdata %>% group_by(itemId) %>%
+  mutate(count = n()) %>%
+  ggplot(aes(x = reorder(itemId, -count), fill = count)) + 
+  geom_bar() +
+  ggtitle("Distribution of reports on individual items", subtitle = "") +
+  xlab("ItemId") +
+  ylab("Number of reports") +
+  theme_hc() +
+  theme(legend.position = "NULL")
+```
+
+A little more than half of the items seems to be reported in almost every session. Two items, 12 and 10, are rarely reported. These are items on the substance abuse scale which are only relevant for a selection of patients. 
+
+
+## How to define the outcome in unlabeled data?
+A major challenge with this dataset is that it is unlabeled. It is unknown how patients and clinicians would characterize the effect of treatment. However, a major reason for using a patient reported feedback measure is to have continuous measurement of treatment effect and outcome. The answer might be present in the data. What defines a "good" outcome and what defines lack of effect of treatment? Through discussions with the research and clinical team of Norse Feedback we have arrived at using one item as the labeling outcome, item 11. This is considered the item that most often would correspond to treatment effect. This question is formulated: "I constantly feel that I can't handle things in my life.". Response is given on a likert scale between 1 and 7, where 1 corresponds to "Not at all" and  7 corresponds to "True for me". In the dataset some patients have consistently low ratings on this item, indicating that this is not a concern for them. In the data pre-processing phase I will have to consider if this labeling method is suitable for all patients. Outside the scope of this research is considering that different items might correspond better to treatment effect in different patients, and that better outcome labels might be used for sub-classes of patients. 
+
+Another important consideration is what represents meaningful improvement on an item rating. In many studies outcomes needs to be improved by 50% or more to be considered a "good" outcome. On a 1-7 likert scale this is restrictive. I have decided to use an improvement of 1 for difference between first and last session 
+as the "good" outcome cut-off. E.g. a patient starting with reporting 5 on item 11 in the first session would need to report 4 or lower in the final session to be labeled as a "good" outcome. As an exception to this rule a change from 7 as the first value to 6 on the final will not be regarded as meaningful improvement.
+
+This is a simple approach to labeling the data, with multiple sources for error. The first time patients report on the feedback system they have to respond to questions that are new to them. In the following sessions they are more familiar with the questions and how they relate to each other. Stable response on an item might not be present until the patient has responded more than a few times. A possible solution could be to use the average score over the two first sessions as the pre-value. Using only pre and post values as a measure for treatment effect excludes the datapoints between. In a treatment series the outcome measure could start low, increase as treatment is in progress and fall back to the starting level towards the end of treatment. Using only pre and post values this would be labeled as no treatment effect. This could be explored further to find if the curvature of the outcome item over time adds information about treatment effect. Using a single item as the outcome will not fit all patients. Approaches to solve this could be to use different outcomes for different patient groups, or to construct an outcome ensemble consisting of several outcomes measures, where the final outcome is a result of an ensemble vote. 
+
+The process of labeling the dataset is detailed in Chapter 3: Data Pre-processing. 
+
+## Handling Missing Values
+The adaptive methodology of Norse Feedback leads to a lot of missing values as the system only require the patient to report on relevant items at any given time. This is valuable for the patient, but makes it harder to analyze the data. The table below show the number of NAs for each of the variables in the dataset.
+
+```{r echo = FALSE}
+tibble("age" = sum(is.na(nfdata$age)),
+       "sex" = sum(is.na(nfdata$sex)),
+       "session" = sum(is.na(nfdata$session)),
+       "session_rank" = sum(is.na(nfdata$session_rank)),
+       "n_sessions" = sum(is.na(nfdata$n_sessions)),
+       "itemId" = sum(is.na(nfdata$itemId)),
+       "rating" = sum(is.na(nfdata$rating)))
+```
+
+We can also use the `lares` library to explore missing data and calculate missingness (in percent).
+```{r}
+# Explore missing data using the lares package
+if(!require(lares)) install.packages("lares", repos = "http://cran.us.r-project.org")
+missingness(nfdata)
+```
+
+The proportion of missing data will increase when I pivot the dataset to a wide format and NAs are introduced for missing values in each column. Many ML algorithms struggle to make sense out of datasets with a lot of missing data and methods for preparing datasets with missing values have been developed. I will briefly describe important considerations when pre-processing sparse datasets, different practical approaches and discuss my conclusions for how to handle missing values in this research. 
+
+### Missing data theoretical framework 
+In statistical theory missing values occur at two levels, the unit level and the item level.^[Dong Y, Peng CY. Principled missing data methods for researchers. Springerplus. 2013;2(1):222. Published 2013 May 14. doi:10.1186/2193-1801-2-222] The dataset includes no conclusive information about the missingness of data on a unit level. Reports are missing for every session for some patients, but we do not know if this is by design or a result of patients refusing to complete the feedback report. The missing values in the dataset occur on an item level and I will focus on this problem. Three aspects of missing values must be considered before deciding on an approach: (1) the proportion of missing data, (2) the missing data mechanisms and (3) the patterns of missing data. These aspects are vital when considering imputation for missing data. 
+
+**Proportion of missing data**
+
+According to the article by Dong and Chen the proportion of missing data is directly related to the quality of statistical inferences. Yet, there is no established cutoff from the literature regarding an acceptable percentage of missing data in a data set for valid statistical inferences.$^1$ The authors of a 2019 paper investigated the impact of missing data proportions when using methods for multiple imputations and concluded that the proportion should not be used to guide decisions.^[Madley-Dowd, Paul & Hughes, Rachael & Tilling, Kate & Heron, Jon. (2019). The proportion of missing data should not be used to guide decisions on multiple imputation. Journal of Clinical Epidemiology. 110. 10.1016/j.jclinepi.2019.02.016.].
+
+**Missing data mechanisms**
+
+The theory of missing data mechanisms was formulated by Rubin in 1976.^[DONALD B. RUBIN, Inference and missing data, Biometrika, Volume 63, Issue 3, December 1976, Pages 581–592, https://doi.org/10.1093/biomet/63.3.581] In this article he described three mechanisms under which missing data can occur: (1) missing at random (MAR), (2) missing completely at random (MCAR), and (3) missing not at random (MNAR). Detailing these mechanisms is beyond the scope of this report, but I will include a brief summary of these mechanisms from a free online book by Stef Van Buuren.^[https://stefvanbuuren.name/fimd/] If the probability of a value being missing is the same for all cases, then the data are said to be MCAR, if the probability of a value being missing is the same only within groups defined by the observed data, then the data are MAR, and if neither MCAR nor MAR holds, then we speak of MNAR. MNAR means that the probability of a value being missing varies for reasons that are unknown to us. A final mechanism is data missing by design. 
+
+For this dataset the data collection methodology actively facilitates missing data as a part of the adaptive and user-friendly goal of the system. The mechanisms of missing data in the dataset are thus probably a mix of MNAR (e.g. sex) and MAR for missing values that the system expected response for, but mostly missing by design.   
+
+**Patterns of missing data**
+
+Three patterns of missing data can be observed: univariate, monotone and arbitrary. An intuitive explanation is provided by Dong and Peng$^1$: *"Suppose there are p variables, denoted as, $Y_1$, $Y_2$, …, $Y_p$. A data set is said to have a univariate pattern of missing if the same participants have missing data on one or more of the $p$ variables. A dataset is said to have a monotone missing data pattern if the variables can be arranged in such a way that, when $Y_j$ is missing, $Y_{j+1}$, $Y_{j+2}$, …, $Y_p$ are missing as well."......"If missing data occur in any variable for any participant in a random fashion, the data set is said to have an arbitrary missing data pattern."*
+
+The data collection methodology of the Norse Feedback system adaptive methodology enable items that have been closed on previous response to be opened again based on trigger items. Due to this methodology the pattern of missing data in this dataset can be considered to be arbitrary. 
+
+### Practical approaches to handling missing values
+__1. Deleting rows with missing values__
+
+A very basic approach would be to just delete patients with missing values. For my dataset this would reduce the total number of patients substantially. I have not yet made a wide dataset and seen the consequences of introducing NAs, but from the distribution of individual items reponses we can infer that for some items almost 2/3 of the responses will include NAs. A common sense strategy could be to remove items with low response proportion, and then remove the rows/patients that still included NAs. However, the APA Task Force on Statistical Inference have explicitly warned against this strategy as it has been shown to lead to bias and/or inefficient estimates in most situations. 
+
+__2. Mean/median imputation__
+
+A very common approach to missing values is to impute the column/item mean or median for missing values. This makes sense if the variable e.g. is patient weight. The average weight for all patients would be a decent guess for a missing value. This approach could be refined by using the average for males for a male patient and the average for females for a female patient. For my dataset this would not make any sense. Missing values on items indicate that these items are of less relevance for the patient and using the mean or median for responses from patients where the item is relevant would result in a rating that is either too high (on items with 1 as best response), or too low (on items with 7 as best response). A better approach would be to impute 1 or 7 for these items, corresponding to the best response on the item. Another approach would be to impute 0. This would eliminate the effect of the response in a linear model. 
+
+__3. Predicting missing values__
+
+In theory any algorithm could be used to predict the missing values. Two methods that often are used are linear regression and k-nearest-neighbors (KNN). With linear regression we would train a model using the available data to create a linear model that would predict missing values. KNN uses similarity/distance measures to find the k most similar observations and predicts the missing value from these observations. Missing values imputation is easy to implement with e.g. the `MICE` library^[van Buuren S, Groothuis-Oudshoorn K (2011). “mice: Multivariate Imputation by Chained Equations in R.” Journal of Statistical Software, 45(3), 1-67. doi: 10.18637/jss.v045.i03]. This handy package contains 28 methods for imputation including various mean imputation methods, various linear and logistic regression methods and classifiers as random forest.
+
+
+__4. Using algorithms that tolerate missing values__
+
+The final approach would be to ignore the missing values and use an algorithm that tolerate datasets with missing values. Classification trees and KNN are algorithms that in theory tolerate missing values. The KNN algorithms available for R do not handle missing values however. A number of classification tree algorithms tolerate missing data. Random forests could be an approach as well as various gradient boosting tree classifiers. The "Extreme Gradient Boosting" algorithm `XGBoost`^[Chen, T., & Guestrin, C. (2016). XGBoost: A Scalable Tree Boosting System. In Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining (pp. 785–794). New York, NY, USA: ACM. https://doi.org/10.1145/2939672.2939785] is both an efficient and accurate classifier and have been used by winners of many Kaggle competitions. I will later in this report briefly explain how this algorithm handles missing values.   
+
+One goal of this project is to create an explainable model for clinical use. Using methods for multiple imputation may increase the accuracy of the model, but would introduce a new layer that potentially obfuscates the interpretability of results. For this reason I have decided to use algorithms that handle missing values and produce explainable results, and/or impute 0s for missing values.  
+
+## Logistic Regression
+Logistic regression is a powerful statistical method for classification and modeling a binominal (or multinominal) outcome with one or more features. To do so logistic regression measures the relationship between the categorical dependent variable and the features by estimating probabilities using the cumulative logistic distribution. 
+
+```{r echo = FALSE}
+#Create a logistic function curve with mu = 0 and scale parameter = 1
+x_plogis <- seq(- 10, 10, by = 0.1) 
+y_plogis <- plogis(x_plogis)
+plot(x_plogis, y_plogis)
+```
+
+For the dataset at hand I plan for a binary outcome, "0" for no treatment response, and "1" for treatment response. Wikipedia on binary outcomes: _Like other forms of regression analysis, logistic regression makes use of one or more predictor variables that may be either continuous or categorical. Unlike ordinary linear regression, however, logistic regression is used for predicting dependent variables that take membership in one of a limited number of categories (treating the dependent variable in the binomial case as the outcome of a Bernoulli trial) rather than a continuous outcome. Given this difference, the assumptions of linear regression are violated.. In particular, the residuals cannot be normally distributed. In addition, linear regression may make nonsensical predictions for a binary dependent variable. What is needed is a way to convert a binary variable into a continuous one that can take on any real value (negative or positive). To do that, binomial logistic regression first calculates the odds of the event happening for different levels of each independent variable, and then takes its logarithm to create a continuous criterion as a transformed version of the dependent variable.^[https://en.wikipedia.org/wiki/Logistic_regression]_ Without going into further details that are outside of the scope of this report the logistic regression function can be formulated like this: 
+
+$$p = \frac{1}{(1 + e^{-(\beta_0+\beta_1X_1+\beta_2X_2.....\beta_nX_n)})}$$
+Where $p$ is the probability of $Y=1$, $\beta_0$ is the intercept, and $\beta_1...n$ are the coefficients for the features $X_1...n$.
+
+Logistic regression in `R` using `glm()` from the `caret` library does not tolerate missing values. To use this algorithm I will have to either remove observations with missing values or do some sort of imputation for missing values. We can infer from the logistic regression function that imputing 0s will allow the function to be trained and to predict on new data. Features with missing values for an individual will after imputing 0s have no impact on the prediction for this individual.
+
+## XGBoost
+The `XGBoost` library^[http://arxiv.org/abs/1603.02754] implements gradient boosting decision tree algorithms. The name of the library is short for e**X**treme **G**radient **Boost**ing and it was developed to push the limits of computations resources for gradient boosted tree algorithms by Tianqi Chen^[https://www.quora.com/What-is-the-difference-between-the-R-gbm-gradient-boosting-machine-and-xgboost-extreme-gradient-boosting/answer/Tianqi-Chen-1]. The story and lessons behind the evolution of XGBoost have been published by Chen^[https://sites.google.com/site/nttrungmtwiki/home/it/data-science---python/xgboost/story-and-lessons-behind-the-evolution-of-xgboost]. XGBoost is one of the most winning algorithms in Kaggle competitions^[https://github.com/dmlc/xgboost/tree/master/demo#machine-learning-challenge-winning-solutions] and has become an essential part of many data scientists toolkit. Gradient boosting algorithms are ensemble algorithms training a fixed number of trees set by the user, or terminating training when no further improvement is achieved. For each iteration the algorithm tries to minimize the residual error of the previous tree. Results of each tree are combined for the final result. Since training is performed in an additive sequential manner the number of trees to train is an important parameter. Training more trees do not necessarily lead to better performance due to the possibility of overfitting the model to the training data. Compared to other gradient boosting algorithms XGBoost is distinguished by also implementing regularization mechanisms to prevent overfitting.  
+
+### XGBoost advantages
+There are two main reasons to use XGBoost, execution speed and model performance. The library was designed to optimalize computational speed and enables the use of multiple CPU cores during training, as well as more advanced options for training large datasets over several machines. In benchmarks XGBoost outperforms other gradient boosting decision tree algorithms on speed. Model performance is confirmed over time through consistent great performance in ML competetions e.g. Kaggle. 
+
+### Hyperparameters
+The `XGBoost` algorithm has many hyperparameters that can be used to tune a model for better performance on a dataset. The total number of hyperparameters and individual choices can be a bit daunting at first, I will give a brief introduction to hyperparameters here to enable the readers to follow the model training in the results section. The following are descriptions from the `XGBoost` library documentation for the selected hyperparameters I expect to tune and use in my model, see the documentation for a full list of parameters and choices.^[https://xgboost.readthedocs.io/en/stable/]
+
+**General Parameters**
+
+* ``booster`` [default= ``gbtree`` ]
+
+  - Which booster to use. Can be ``gbtree``, ``gblinear`` or ``dart``; ``gbtree`` and ``dart`` use tree based models while ``gblinear`` uses linear functions.
+
+* ``verbosity`` [default=1]
+
+  - Verbosity of printing messages.  Valid values are 0 (silent), 1 (warning), 2 (info), 3
+    (debug).  Sometimes XGBoost tries to change configurations based on heuristics, which
+    is displayed as warning message.  If there's unexpected behaviour, please try to
+    increase value of verbosity.
+
+**Parameters for Tree Booster**
+
+* ``eta`` [default=0.3, alias: ``learning_rate``]
+
+  - Step size shrinkage used in update to prevents overfitting. After each boosting step, we can directly get the weights of new features, and ``eta`` shrinks the feature weights to make the boosting process more conservative.
+  - range: [0,1]
+
+* ``gamma`` [default=0, alias: ``min_split_loss``]
+
+  - Minimum loss reduction required to make a further partition on a leaf node of the tree. The larger ``gamma`` is, the more conservative the algorithm will be.
+  - range: [0,∞]
+
+* ``max_depth`` [default=6]
+
+  - Maximum depth of a tree. Increasing this value will make the model more complex and more likely to overfit. 0 is only accepted in ``lossguide`` growing policy when ``tree_method`` is set as ``hist`` or ``gpu_hist`` and it indicates no limit on depth. Beware that XGBoost aggressively consumes memory when training a deep tree.
+  - range: [0,∞] (0 is only accepted in ``lossguide`` growing policy when ``tree_method`` is set as ``hist`` or ``gpu_hist``)
+
+* ``min_child_weight`` [default=1]
+
+  - Minimum sum of instance weight (hessian) needed in a child. If the tree partition step results in a leaf node with the sum of instance weight less than ``min_child_weight``, then the building process will give up further partitioning. In linear regression task, this simply corresponds to minimum number of instances needed to be in each node. The larger ``min_child_weight`` is, the more conservative the algorithm will be.
+  - range: [0,∞]
+
+* ``subsample`` [default=1]
+
+  - Subsample ratio of the training instances. Setting it to 0.5 means that XGBoost would randomly sample half of the training data prior to growing trees. and this will prevent overfitting. Subsampling will occur once in every boosting iteration.
+  - range: (0,1]
+
+* ``colsample_bytree`` [default=1]
+
+  - ``colsample_bytree`` is the subsample ratio of columns when constructing each tree. Subsampling occurs once for every tree constructed.
+
+* ``lambda`` [default=1, alias: ``reg_lambda``]
+
+  - L2 regularization term on weights. Increasing this value will make model more conservative.
+
+* ``alpha`` [default=0, alias: ``reg_alpha``]
+
+  - L1 regularization term on weights. Increasing this value will make model more conservative.
+
+**Learning Task Parameters**
+
+* ``objective`` [default=reg:squarederror]
+  - ``binary:logistic``: logistic regression for binary classification, output probability
+  
+* ``eval_metric`` [default according to objective]
+
+  - Evaluation metrics for validation data, a default metric will be assigned according to objective (rmse for regression, and logloss for classification, mean average precision for ranking)
+    - ``error``: Binary classification error rate. It is calculated as ``#(wrong cases)/#(all cases)``. For the predictions, the evaluation will regard the instances with prediction value larger than 0.5 as positive instances, and the others as negative instances.
+
+### Missing values and XGBoost
+XGBoost uses a process called sparsity-aware split finding by the authors of the paper introducing the algorithm. In practice this means that for every split in the tree a default direction is decided based on which of the two alternatives on average gives the best score. When there is a missing value for this split, the default direction is chosen and the path down the tree continues. This is a neat solution to the missing values problem, but introduces some bias into the model. However, the features with many missing values should in theory not be among the features that provides the best splits and as such will not be part of many trees. I will need to consider ow this might influence the model and which features to keep for analysis based on the proportion of missing values in the data pre-processing phase. Further reading for interested readers: "XGBoost is not black magic"^[https://towardsdatascience.com/xgboost-is-not-black-magic-56ca013144b4] 
+
+## SHAP - A machine learning output explanation approach
+SHAP (SHapley Additive exPlanation) was proposed in 2016 by S.Lundberg and S. Lee.^[https://proceedings.neurips.cc/paper/2017/file/8a20a8621978632d76c43dfd28b67767-Paper.pdf]. It is a game theoretic approach to explain the output of any machine learning model by measuring the features importance to the predictions. The foundation for SHAP is Shapeley values.^[https://en.wikipedia.org/wiki/Shapley_value] In the context of machine learning the core idea behind Shapley value based explanations of machine learning models is to use fair allocation results from cooperative game theory to allocate credit for a model’s output $f(x)$ among its input features.^[https://shap.readthedocs.io/en/latest/overviews.html] 
+
+The benefits of using SHAP are both at an overall and at a local level, as follows:
+
+- At a global level, the collective SHAP values help to interpret and understand the model. They show
+how much each predictor contributes, either positively or negatively, to the target variable. It allows
+for very intuitive interpretation of the model structure and is generalisable across a number of
+different modelling methodologies.
+
+- At a local level, each observation gets its own set of SHAP values (one for each predictor). This
+greatly increases transparency, by showing contributions to predictions on a case by case basis,
+which traditional variable importance algorithms are not able to do.^[https://parker-fitzgerald.com/wp-content/uploads/2019/12/ML-Interpretability-SHAP-example.pdf] 
+
+The standard appraoch to evaluating feature importance in a tree based model is by assigning importance based on model gain from features. Scott Lundberg has published an excellent piece about the advantages of SHAP over this approach.^[https://towardsdatascience.com/interpretable-machine-learning-with-xgboost-9ec80d148d27]
+
+Another popular model explanation approach is LIME. This approach works well with few features and on a global level, but SHAP has several advantages over LIME when dealing with a lot of features and in local explanations. Readers with further interest in approaches to interpretable machine learning might find this e-book interesting: "Molnar, Christoph. “Interpretable machine learning. A Guide for Making Black Box Models Explainable”"^[https://christophm.github.io/interpretable-ml-book/] 
+
+# Data Pre-processing
+In this chapter I will prepare the dataset for analysis by calculating outcome and labeling the data, implement a strategy for missing values, do some feature engineering and finally split the dataset for training, test and validation. 
+
+## Outcome Labeling
+As discussed in Chapter 2 I need to add labels to the unlabeled dataset in order to perform supervised learning. 
+First I want to again quickly inspect the dataset.
+```{r}
+glimpse(nfdata)
+length(unique(nfdata$patN))
+```
+
+There are `r length(unique(nfdata$patN))` unique patients in the dataset. 
+I will use item 11 as the outcome defining item. 
+```{r}
+# Outcome parameter is item 11
+item_df[11]
+```
+
+As we observed in the missing data exploration in Chapter 2, item 11 is the most prevalent in the dataset. I want to know how many missing values there are for item 11.
+```{r}
+# Missing values on item 11
+nfdata %>% filter(itemId == 11) %>% summarize(n = sum(is.na(rating)))
+
+```
+
+I start by creating a dataframe to store improvement on the outcome item
+```{r}
+# Create a dataframe to store improvement in outcomes
+outcomes_df <- nfdata %>% 
+  filter(itemId == 11) %>% 
+  group_by(patN) %>% 
+  mutate(imp = rating[which.min(session_rank)]-rating[which.max(session_rank)]) %>%
+  ungroup() %>%
+  arrange(patN)
+```
+
+An improvement of 1 on the 1-7 likert scale is a marginal improvement, and it is doubtful that for patients starting at 7 an improvement to 6 represents meaningful treatment effect. I will filter these patients and set their improvement to 0. 
+```{r}
+# Find patients that start treatment with 7 and end with 6
+filter_list <- nfdata %>% 
+  filter(itemId == 11, session_rank == 1, rating == 7) %>% 
+  select(patN, itemId, session_rank, rating)
+
+filter_list <- nfdata %>% filter(itemId == 11, patN %in% filter_list$patN) %>%
+  group_by(patN) %>%
+  filter(session_rank == max(session_rank), rating == 6)
+
+# Number of patients to filter
+length(unique(filter_list$patN))
+
+# Set the improvement for the filtered patients to 0
+outcomes_df$imp[outcomes_df$patN %in% filter_list$patN] <- 0
+```
+
+Lets take a look at the distribution of improvement on the outcome item and calculate some summary statistics.
+```{r}
+# Plot distribution of outcomes
+hist(outcomes_df$imp)
+
+# Summary statistics of outcomes
+summary(outcomes_df$imp)
+```
+
+It's time to convert the improvement to a binary outcome and update the dataset.
+```{r}
+# Binary outcome
+outcomes <- outcomes_df %>% 
+  mutate(outcome = ifelse(imp > 0, 1, 0)) %>% 
+  select(patN, outcome) %>%
+  distinct(patN, .keep_all = TRUE)
+
+# Create final data set
+nfdata <- nfdata %>% 
+  left_join(outcomes, by = "patN") %>%
+  filter(!is.na(outcome)) 
+
+glimpse(nfdata %>% distinct(patN, .keep_all = TRUE) %>% select(patN, outcome))
+```
+
+After removing patients with missing outcome variable I have `r length(unique(nfdata$patN))` patients in the dataset. Of these the proportion that I have labeled as no treatment effect is `r mean(nfdata$outcome == 0)`.
+
+Finally I will update the patient dataframe to only include patients that are also in the dataset.
+```{r}
+# Update patient_df
+patient_df <- patient_df %>% filter(patN %in% nfdata$patN)
+```
+
+## Transforming the dataset
+The default data format in the `R` tidyverse is "tidy" data in a long format, meaning that each observation is on a separate row with the variables in the columns. To transform this dataset into a tidy format each session for each patient should be on a row and the items should be in columns. However, since this is multivariate time series data the observations are not independent. To train models both across items and across sessions I will transform the dataset into a wide dataset where each patient is on the rows and all observations for that patient on the different variables over time is in the columns. Only the three first sessions will be included as I am interested in predicting outcome after three sessions. 
+
+```{r}
+# I want to use the first 3 sessions to train and predict outcome
+nfdata_w <- nfdata %>% group_by(patN) %>% 
+  filter(session_rank <=3) %>%
+  select(-session, -n_sessions) %>%
+  ungroup()
+```
+
+Since this is time series data some variables like age can change over time. Let's check if there are any patients that had a birthday during the first three sessions, and if so set the age to the age at start of treatment.
+```{r}
+# Some patients got a year older during treatment
+age_changed <- nfdata_w %>% 
+  group_by(patN, age) %>%
+  summarize(n = n()) %>%
+  ungroup() %>% 
+  filter(patN %in% unique(.[["patN"]][duplicated(.[["patN"]])]))
+
+head(age_changed, 20)
+
+# Set patient age to age at first session
+nfdata_w <- nfdata_w %>% 
+  group_by(patN) %>% 
+  mutate(age = min(age)) %>%
+  ungroup()
+```
+
+Transform the data to a wide format
+```{r}
+# Create wide dataframe
+nfdata_w <- pivot_wider(nfdata_w, 
+                        names_from = c(itemId, session_rank), 
+                        values_from = rating, 
+                        values_fn = list(rating = mean))
+
+# One-hot encoding
+dmy <- dummyVars("~.", data = nfdata_w)
+nfdata_w <- data.frame(predict(dmy, newdata = nfdata_w))
+
+glimpse(nfdata_w)
+```
+
+## Missing Values
+Although I have removed patients where outcome labeling resulted in NAs, there still is a possibility that item 11 was missing completely from the first session. This will become evident now that NAs have been introduced by creating the wide dataset. I will again use the `lares` library to inspect the dataset for missing values and remove entries where item 11 was missing from the first session. 
+```{r}
+# lares library - exploring and reducing missing data
+missingness(nfdata_w)
+
+# Removing patients with missing report on item 11 in the first session
+nfdata_w <- nfdata_w %>%
+  filter(!is.na(X.11_1.))
+
+missingness(nfdata_w)
+
+length(unique(nfdata_w$patN))
+
+# Update patient dataframe
+patient_df <- patient_df %>% filter(patN %in% nfdata_w$patN)
+```
+Only a few patients were removed by this filtering. 
+
+As evident from the missingness table items 10 and 12 are distinguished by a high proportion of missing values. These are items specific for substance abuse that are not relevant for all patients. However, they could be highly relevant to predict treatment effect for the patients that report on this item. For that reason I will include these items in training models despite the high missingness. 
+
+**Missing values imputation**
+
+As discussed in Chapter 2 it is extremely important to carefully consider how to handle missing values as wrong methodology can introduce bias and/or impact performance of the model. To summarize the three main aspects for this dataset the proportion of missing values (missingness) is varying between items and is as high as 75% for two items. Most items have less than 50% missingness. The mechanism of missing values is mostly missing by design, but for the variable "sex" MNAR missingness can not be excluded. Most imputation methods are built on the hypothesis that missing data is MAR making them unsuitable for this dataset. Additionally, the missing values pattern is arbitrary further complicating imputation. 
+
+The methodology of the Norse Feedback system that results in missing values is carefully designed to be adaptive and user-friendly. Items that are not relevant on sub-scales are "hidden" from patients until they respond over/under a given threshold and the sub-scales are opened. In this context missing values add relevant information, the item with a missing value is not very relevant to the patient, probably meaning it has less impact on their behavioral health problem. This information could be useful for the models when predicting outcomes. For this reason I will impute "0" for missing values. 
+
+```{r}
+# Replace NAs in the item rating columns with 0s
+nfdata_w[, 7:93][is.na(nfdata_w[,7:93])] <- 0
+pander(nfdata_w[1:11,1:25])
+```
+
+## Feature Engineering
+The three first observations for each item could be noisy. I want to add a smoothed feature that represents treatment response over time and choose to use a simple trend line from the first to the last session. This could of course also have been a regression line that would fit all three observations better, but I want to keep the features simple and intuitive. The variance for the three observations could be of importance for confidence in predictions and I add the standard deviation as a feature. Finally the model should know how each patient scores each item by seeing the value for each item in the final (third) observation. The following code chunk performs all these operations and displays the final dataset.
+
+```{r}
+if(!require(matrixStats)) install.packages("matrixStats", repos = "http://cran.us.r-project.org")
+
+# Sort columns by name
+nfdata_w <- nfdata_w %>% select(order(colnames(.)))
+
+# Create temporary dataframes for each session and sort columns by name
+nfdata_1 <- nfdata_w %>% select(ends_with("_1.")) %>% select(order(colnames(.)))
+nfdata_2 <- nfdata_w %>% select(ends_with("_2.")) %>% select(order(colnames(.)))
+nfdata_3 <- nfdata_w %>% select(ends_with("_3.")) %>% select(order(colnames(.)))
+
+# Calculate the trend for the first to the third session
+nfdata_t <- data.frame(
+  sapply(seq(1:ncol(nfdata_1)), 
+         function(i){(nfdata_1[,i] - nfdata_3[,i])/-2}))
+
+# Rename columns
+colnames(nfdata_t) <- gsub("_1.", "_trend", colnames(nfdata_1))
+
+# Find the standard deviation for each item over the three first sessions
+nfdata_sd <- data.frame(sapply(seq(7, ncol(nfdata_w), 3),
+                          function(i){rowSds(as.matrix(nfdata_w[,i:(i+2)]))}))
+
+# Rename columns
+colnames(nfdata_sd) <- gsub("_1.", "_sd", colnames(nfdata_1))
+
+# Update the dataset and select features to use for analysis
+nfdata_w <- bind_cols(nfdata_w %>% 
+                        select(patN, age, sex.F, sex.M, sex.O, ends_with("_3."), outcome) %>% 
+                        select(order(colnames(.))), nfdata_t, nfdata_sd)
+
+glimpse(nfdata_w)
+```
+
+## Splitting Datasets
+Now that I have completed the data wrangling, missing values handling and feature engineering, it is time to split the dataset into a validation set, a training set and a test set. 
+```{r}
+# Split into train and validation set
+set.seed(31) 
+test_index <- createDataPartition(y = nfdata_w$outcome, times = 1, p = 0.2, list = FALSE)
+nfdata_train_full <- nfdata_w[-test_index,]
+nfdata_validation <- nfdata_w[test_index,]
+
+# Split into train and test set
+set.seed(41) 
+test_index <- createDataPartition(y = nfdata_train_full$outcome, times = 1, p = 0.2, list = FALSE)
+nfdata_test <- nfdata_train_full[test_index,]
+nfdata_train <- nfdata_train_full[-test_index,]
+
+nfdata_train <- nfdata_train %>% select(order(colnames(.)))
+nfdata_test <- nfdata_test %>% select(order(colnames(.)))
+
+summary(nfdata_train$outcome)
+summary(nfdata_test$outcome)
+summary(nfdata_validation$outcome)
+
+dim(nfdata_train)
+dim(nfdata_test)
+dim(nfdata_validation)
+```
+
+# Results
+In this chapter I will explore the relationship between the features in the training set and train models using linear regression and gradient boosted decision trees. 
+
+## Exploring the training set
+I want to explore the feature correlations in the training set. To visualize the correlations I am using functions from the `corrplot` library. 
+```{r corrplot, fig.height = 6, fig.width = 6}
+if(!require(corrplot)) install.packages("corrplot", repos = "http://cran.us.r-project.org")
+
+# Correlation matrix for features
+mcor <- cor(na.omit(nfdata_train_full))
+corrplot.mixed(mcor, upper = "color", lower = "number", number.cex= 0.3, tl.cex = 0.3)
+```
+
+Visualizing all correlations makes it hard to identify correlated features, but the overall impression is that there are few features that have high negative correlations, but there seems to be several with high positive correlation. To get a more informative visualization I will filter correlations with an absolute value over 0.7.
+```{r filtered corrplot, fig.height = 6, fig.width = 6}
+# Filtered correlation matrix
+threshold <- 0.7
+mcor_1 <- mcor
+diag(mcor_1) <- 0
+mcor_2 <- apply(abs(mcor_1) >= threshold, 1, any)
+
+corrplot.mixed(mcor[mcor_2, mcor_2], upper = "color", lower = "number", number.cex= 0.6, tl.cex = 0.5)
+```
+
+The top 20 correlations in the dataset:
+```{r}
+# Exploring feature correlations
+corr_cross(nfdata_train_full, max_pvalue = 0.05, top = 20)
+```
+
+Item-item correlations for session 3:
+```{r}
+nfdata_train_full %>% select(ends_with("3.")) %>% corr_cross(max_pvalue = 0.05, top = 25)
+```
+
+It would also be interesting to see which features are most correlated with outcome.
+```{r}
+# Feature correlation with outcome
+corr_var(nfdata_train_full, var = outcome, top = 20)
+```
+
+To see the variance in item-item correlation for each item we can check local correlation
+```{r}
+#Local correlation for third session items
+nfdata_train_full %>% select(ends_with("3.")) %>% corr_cross(type = 2)
+```
+
+And finally I will check the frequency of responses for each feature
+```{r}
+# Frequency of response per item
+freqs_df(nfdata_train_full[,7:92], plot = TRUE)
+```
+
+## Baseline - Random Predictions
+As a baseline model I create predictions based on population probabilities of outcomes. 
+
+```{r}
+if(!require(pscl)) install.packages("pscl", repos = "http://cran.us.r-project.org")
+if(!require(ROCR)) install.packages("ROCR", repos = "http://cran.us.r-project.org")
+
+# Finding the probability of a "good" outcome
+prob_1 <- mean(nfdata_train$outcome == 1)
+
+# Create random predictions based on probability 
+set.seed(574)
+base_pred <- rbinom(n = nrow(nfdata_test), size = 1, prob = prob_1)
+
+# Check proportion of "good" outcomes in the predictions
+mean(base_pred == 1)
+
+# Create a confusion matrix
+cfm <- confusionMatrix(as.factor(base_pred), as.factor(nfdata_test$outcome))
+cfm
+
+# Plot ROC curve and calculate the AUC
+pr <- prediction(base_pred, nfdata_test$outcome)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+
+# Create a summary table for results
+summary <- tribble( ~Model, ~Accuracy, ~"95% CI Lower", ~"95% CI Upper", ~AUC, 
+                    "Random", cfm$overall[[1]], cfm$overall[[3]], cfm$overall[[4]], auc)
+
+# Print summary table
+knitr::kable(summary)
+```
+As expected the outcome of these predictions are about the same as a coin toss. Note that the accuracy is reported as the accuracy in predicting lack of treatment outcome ("0").  
+
+## Logistic Regression
+The first model I will train is a logistic regression model using the generalized linear models (glm) algorithm. For this algorithm to be trained on all data there can be no NAs in the dataset, and I choose to set the remaining NAs in the "sex" variable to 0s rather than these observations being omitted during training. 
+
+```{r}
+# Set up datasets, remove the patient number variable.
+glm_train <- nfdata_train %>% select(-patN)
+glm_test <- nfdata_test %>% select(-patN)
+
+# For glm there can be no NAs. 
+glm_train[is.na(glm_train)] <- 0
+glm_test[is.na(glm_test)] <- 0
+
+# Train a logistic regression model
+glm_model <- glm(outcome ~., family=binomial, data = glm_train)
+summary(glm_model)
+alias(glm_model)
+```
+
+As we can see there are only 9 features that are statistically significant (two-tailed p < 0.05). As we see in the alias the function for the regression gets quite long with all features. One option to simplify this model could be to reduce the number of features to those considered significant and then train another model to check results. Yet another option would be dimensionality reduction using principal component analysis (PCA) or matrix factorization (e.g. singular value decomposition (SVD)). However, these approaches would complicate the interpretability/intuition of the model and I will leave these approaches for future exploration for now. 
+
+Goodness of fit for this model can be evaluated by finding the pseudo-R$^2$ since R$^2$ can not be used directly for logistic regression. 
+```{R}
+# MacFaddens R^2 for the model 
+pR2(glm_model)
+```
+A psuedo MacFaddens R$^2$ of 0.224 indicates a reasonable, but not excellent fit.  
+
+With a model trained it is time to make some predictions and evaluate the performance of the model.
+```{r}
+# Create predictions in the test set
+glm_pred <- predict.glm(glm_model, newdata = glm_test, type='response')
+
+# Predictions are given as probabilities, transform to binary outcome
+glm_pred <- ifelse(glm_pred > 0.5,1,0)
+
+# Construct a confusion matrix
+cfm2 <- confusionMatrix(as.factor(glm_pred), as.factor(glm_test$outcome))
+cfm2
+
+# Plot ROC curve and calculate the AUC
+pr <- prediction(glm_pred, glm_test$outcome)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+auc2 <- performance(pr, measure = "auc")
+auc2 <- auc2@y.values[[1]]
+auc2
+
+# Create a summary table for results
+summary <- bind_rows(
+  summary, tribble( ~Model, ~Accuracy, ~"95% CI Lower", ~"95% CI Upper", ~AUC, 
+                    "glm", cfm2$overall[[1]], cfm2$overall[[3]], cfm2$overall[[4]], auc2))
+summary
+```
+
+## XGBoost
+The second model to train is XGBoost. I will first train a model using the default parameters to evaluate performance and then try to optimize performance through hypermarameter tuning using the `caret` library. The final parameters will be used by the functions from the `XGBoost` library to train and predict on the test set. Finally, I will train a model with the best parameters on the full training data and make new predictions on unseen data in the validation set. 
+
+### Dataset preparation
+Before I can start training the algorithm I need to prepare the datasets. 
+```{r}
+xgb_train <- nfdata_train %>% select(-outcome, -patN)
+xgb_test <- nfdata_test %>% select(-outcome, -patN)
+
+xgb_tr_outcome <- nfdata_train$outcome
+xgb_te_outcome <- nfdata_test$outcome
+
+# Caret algorithm requires outcomes to be factors
+xgb_tr_foutcome <- as.factor(xgb_tr_outcome)
+xgb_te_foutcome <- as.factor(xgb_te_outcome)
+```
+
+### Base XGBoost model
+The default parameters are passed to the training algorithm in a parameter grid. 
+```{r}
+set.seed(93)
+
+# Setting up the algorithm parameters
+grid_default <- expand.grid(
+  nrounds = 100,
+  max_depth = 6,
+  eta = 0.3,
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = 1,
+  subsample = 1
+)
+
+# Defining 
+train_control <- caret::trainControl(
+  method = "none" # No resampling
+)
+
+xgb_base <- caret::train(
+  x = xgb_train,
+  y = xgb_tr_foutcome,
+  trControl = train_control,
+  tuneGrid = grid_default,
+  method = "xgbTree",
+  verbose = FALSE
+)
+
+# Evaluating fit on test data
+xgb_base_pred <- (as.numeric(predict(xgb_base, xgb_test)))-1
+mean(xgb_te_outcome == xgb_base_pred)
+
+cfm3 <- confusionMatrix(as.factor(xgb_base_pred), xgb_te_foutcome)
+cfm3
+```
+
+The most important variables in the model can be inspected using the `varImp()`function.
+```{r}
+varImp(xgb_base)
+```
+
+ROC curve for the model and the updated results table:
+```{r}
+# Plot ROC curve
+pr <- prediction(predictions = xgb_base_pred, labels = xgb_te_foutcome)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+auc3 <- performance(pr, measure = "auc")
+auc3 <- auc3@y.values[[1]]
+auc3
+
+summary <- bind_rows(
+  summary, tribble( ~Model, ~Accuracy, ~"95% CI Lower", ~"95% CI Upper", ~AUC, 
+                    "XGBoost - default", cfm3$overall[[1]], cfm3$overall[[3]], cfm3$overall[[4]], auc3))
+
+summary
+```
+
+### Hyperparameter tuning
+To see if I can improve on the default XGBoost performance I will test with different hyperparameter setting. Ideally, this should be done as one grid search through all parameters, but that is computationally very expensive. I will instead take step-wise approach where I identify the best parameter setting for 1-2 hyperparameters at a time.
+
+To ease visualization of the results I start by defining a plot function that I will use in all steps. 
+```{r}
+# Plot function
+tuneplot <- function(x, probs = .99) {
+  ggplot(x) +
+    coord_cartesian(ylim = c(min(x$results$Accuracy), max(x$results$Accuracy))) +
+    theme_hc()
+}
+```
+
+First I will test different learning rates and tree depths using 5-fold cross-validation. I let the model iterate for 1000 rounds, and start at 200 rounds to avoid initial noise. 
+```{r}
+# Tune learning rate and tree depth
+nrounds <- 1000
+
+tune_grid <- expand.grid(
+  nrounds = seq(from = 200, to = nrounds, by = 50),
+  eta = c(0.025, 0.05, 0.1, 0.3),
+  max_depth = c(2, 3, 4, 6, 8, 10),
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = 1,
+  subsample = 1
+)
+
+tune_control <- caret::trainControl(
+  method = "cv", # cross-validation
+  number = 5, # with n folds 
+  verboseIter = FALSE, 
+  allowParallel = TRUE,
+  seeds = set.seed(45)
+)
+
+xgb_tune_depth <- caret::train(
+  x = xgb_train,
+  y = xgb_tr_foutcome,
+  trControl = tune_control,
+  tuneGrid = tune_grid,
+  method = "xgbTree",
+  verbosity = 0
+)
+
+tuneplot(xgb_tune_depth)
+xgb_tune_depth$bestTune
+```
+
+The best parameter setting seems to 0.05 for eta and a max tree depth of 2. I will use these parameters as I initialize another grid tune for optimal child weight. 
+
+```{r}
+# Tune child weight
+set.seed(62)
+nrounds <- 1000
+
+tune_grid <- expand.grid(
+  nrounds = seq(from = 200, to = nrounds, by = 50),
+  eta = xgb_tune_depth$bestTune$eta,
+  max_depth = xgb_tune_depth$bestTune$max_depth,
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = c(1, 2, 3, 4, 5),
+  subsample = 1
+)
+
+tune_control <- caret::trainControl(
+  method = "cv", # cross-validation
+  number = 5, # with n folds 
+  verboseIter = FALSE, 
+  allowParallel = TRUE,
+  seeds = set.seed(62)
+)
+
+xgb_tune_child <- caret::train(
+  x = xgb_train,
+  y = xgb_tr_foutcome,
+  trControl = tune_control,
+  tuneGrid = tune_grid,
+  method = "xgbTree",
+  verbosity = 0
+)
+
+
+tuneplot(xgb_tune_child)
+xgb_tune_child$bestTune
+```
+
+The best setting for the minimum child wwight parameter seems to be 2.
+
+Next, I will initialize another grid tune for the column sample and subsample rate hyperparameters.
+```{r}
+# Tune column sample and subsample rate
+nrounds <- 1000
+
+tune_grid <- expand.grid(
+  nrounds = seq(from = 200, to = nrounds, by = 50),
+  eta = xgb_tune_depth$bestTune$eta,
+  max_depth = xgb_tune_depth$bestTune$max_depth,
+  gamma = 0,
+  colsample_bytree = c(0.4, 0.6, 0.8, 1.0),
+  min_child_weight = xgb_tune_child$bestTune$min_child_weight,
+  subsample = c(0.5, 0.75, 1.0)
+)
+
+tune_control <- caret::trainControl(
+  method = "cv", # cross-validation
+  number = 5, # with n folds 
+  verboseIter = FALSE, 
+  allowParallel = TRUE,
+  seeds = set.seed(27)  
+)
+
+xgb_tune_sample <- caret::train(
+  x = xgb_train,
+  y = xgb_tr_foutcome,
+  trControl = tune_control,
+  tuneGrid = tune_grid,
+  method = "xgbTree",
+  verbosity = 0
+)
+
+
+tuneplot(xgb_tune_sample)
+xgb_tune_sample$bestTune
+```
+
+The default settings of column sample, and subsample rate of 1 seems to be the best settings. 
+
+The optimal gamma setting could be important to avoid overtraining the model. I initialize another grid tune for this parameter. 
+```{r}
+# Tune gamma
+nrounds <- 1000
+
+tune_grid <- expand.grid(
+  nrounds = seq(from = 200, to = nrounds, by = 50),
+  eta = xgb_tune_depth$bestTune$eta,
+  max_depth = xgb_tune_depth$bestTune$max_depth,
+  gamma = c(0, 0.05, 0.1, 0.5, 0.7, 0.9, 1.0),
+  colsample_bytree = xgb_tune_sample$bestTune$colsample_bytree,
+  min_child_weight = xgb_tune_child$bestTune$min_child_weight,
+  subsample = xgb_tune_sample$bestTune$subsample
+)
+
+tune_control <- caret::trainControl(
+  method = "cv", # cross-validation
+  number = 5, # with n folds 
+  verboseIter = FALSE, 
+  allowParallel = TRUE,
+  seeds = set.seed(15)  
+)
+
+xgb_tune_gamma <- caret::train(
+  x = xgb_train,
+  y = xgb_tr_foutcome,
+  trControl = tune_control,
+  tuneGrid = tune_grid,
+  method = "xgbTree",
+  verbosity = 0
+)
+
+
+tuneplot(xgb_tune_gamma)
+xgb_tune_gamma$bestTune
+```
+
+A higher gamma seems to yield better results, with 0.9 being the optimal setting. 
+
+
+Finally, I will check to see if the learning rate, eta, can be optimalized. 
+```{r}
+# Tune eta
+nrounds <- 5000
+
+tune_grid <- expand.grid(
+  nrounds = seq(from = 200, to = nrounds, by = 50),
+  eta = c(0.01, 0.025, 0.05, 0.1, 0.3),
+  max_depth = xgb_tune_depth$bestTune$max_depth,
+  gamma = xgb_tune_gamma$bestTune$gamma,
+  colsample_bytree = xgb_tune_sample$bestTune$colsample_bytree,
+  min_child_weight = xgb_tune_child$bestTune$min_child_weight,
+  subsample = xgb_tune_sample$bestTune$subsample
+)
+
+tune_control <- caret::trainControl(
+  method = "cv", # cross-validation
+  number = 5, # with n folds 
+  verboseIter = FALSE, 
+  allowParallel = TRUE,
+  seeds = set.seed(52)  
+)
+
+xgb_tune_eta <- caret::train(
+  x = xgb_train,
+  y = xgb_tr_foutcome,
+  trControl = tune_control,
+  tuneGrid = tune_grid,
+  method = "xgbTree",
+  verbosity = 0
+)
+
+
+tuneplot(xgb_tune_eta)
+xgb_tune_eta$bestTune
+```
+
+A learning rate of 0.05 gives the highest accuracy, and it seems like a higher learning rate quickly reaches a level where no further improvements can be made. Interestingly, lower learning rates also plateaus, but at lower accuracy, although the margins are small. 
+
+
+### Optimal XGBoost
+For the rest of the XGBoost model training I will use the `XGBoost` library.
+```{r}
+if(!require(xgboost)) install.packages("xgboost", repos = "http://cran.us.r-project.org")
+if(!require(DiagrammeR)) install.packages("DiagrammeR", repos = "http://cran.us.r-project.org") #required by xgboost
+if(!require(Ckmeans.1d.dp)) install.packages("Ckmeans.1d.dp", repos = "http://cran.us.r-project.org") #required by xgboost
+```
+
+The `XGBoost` library requires data to be in specific formats. 
+```{r}
+# The XGBoost library requires a matrix for outcomes
+xgb_tr_outcome <- as.matrix(xgb_tr_outcome)
+xgb_te_outcome <- as.matrix(xgb_te_outcome)
+
+# Converting the datasets into the xgb.DMatrix format for the XGBoost algorithms
+xgb_train_xgb <- xgb.DMatrix(data = as.matrix(xgb_train), label = xgb_tr_outcome)
+xgb_test_xgb <- xgb.DMatrix(data = as.matrix(xgb_test), label = xgb_te_outcome)
+```
+
+I will use the hyperparameters resulting from the tuning process with the `caret` library.
+```{r}
+# Best parameteres from tuning
+params <- list(booster = "gbtree", 
+                objective = "binary:logistic", 
+                eta=0.05, 
+                gamma= 0.9,
+                alpha = 0,
+                lambda = 0,
+                max_depth = 2, 
+                min_child_weight= 2, 
+                subsample= 1, 
+                colsample_bytree= 1,
+                eval_metric = "error")
+```
+
+First, I want to find the optimal number of training rounds for the model using 5-fold cross validation in the training set. 
+```{r XGBoost CV}
+# 5-fold cross-validation with XGBoost library to find optimal nrounds
+set.seed(68)
+xgbcv <- xgb.cv(data = as.matrix(xgb_train),
+                label = xgb_tr_outcome,
+                params = params,
+                nrounds = 2000,
+                nfold = 5,
+                showsd = T,
+                stratified = T,
+                print_every_n = 50,
+                early_stopping_rounds = 1500,
+                maximize = F)
+
+# Plot error curves
+cv_model_error <- tibble(train_error = xgbcv$evaluation_log$train_error_mean, 
+                         test_error = xgbcv$evaluation_log$test_error_mean,
+                         iters = seq(1, length(xgbcv$evaluation_log$train_error_mean), 1))
+
+ggplot(cv_model_error) + geom_point(aes(iters, train_error), color = "blue") + 
+  geom_point(aes(iters, test_error), color = "red") +
+  theme_hc()
+```
+
+The cross validation indicates that the optimal training rounds are around 325. No further improvement in model accuracy in cross-validation is achieved with continued training. 
+
+I train the model using the hyperparameters from the tuning process and the number of rounds found through cross-validation. The reference this time will be the test set that the model has not seen so far. 
+```{r XGBoost train}
+# Train model with hyperparameters from the tuning process
+
+set.seed(75)
+xgb <- xgb.train(params = params, 
+                 data = xgb_train_xgb,
+                 nrounds = 325, 
+                 watchlist = list(test = xgb_test_xgb, train = xgb_train_xgb),
+                 print_every_n = 10,
+                 early_stopping_rounds = 200, 
+                 maximize = F)
+
+# Plot error
+model_error <- tibble(train_error = xgb$evaluation_log$train_error, 
+                      test_error = xgb$evaluation_log$test_error,
+                      iters = seq(1, length(train_error), 1))
+
+ggplot(model_error) + geom_point(aes(iters, train_error), color = "blue") + 
+  geom_point(aes(iters, test_error), color = "red") +
+  theme_hc()
+```
+
+The models performance in the test set is similar to what was seen during cross-validation.  
+
+It's time to make some predictions!
+```{r}
+# Make predictions on test set
+xgbpred <- predict(xgb, xgb_test_xgb)
+xgbpreds <- ifelse(xgbpred > 0.5,1,0)
+
+cfm4 <- confusionMatrix(as.factor(xgbpreds), as.factor(xgb_te_outcome))
+cfm4
+
+# Plot ROC curve
+pr <- prediction(predictions = xgbpred, labels = xgb_te_outcome)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf,
+     colorize = TRUE,
+     print.cutoffs.at= seq(0,1,0.05),
+     text.adj=c(-0.2,1.7))
+auc4 <- performance(pr, measure = "auc")
+auc4 <- auc4@y.values[[1]]
+auc4
+
+summary <- bind_rows(
+  summary, tribble( ~Model, ~Accuracy, ~"95% CI Lower", ~"95% CI Upper", ~AUC, 
+                    "XGBoost - tuned", cfm4$overall[[1]], cfm4$overall[[3]], cfm4$overall[[4]], auc4))
+
+knitr::kable(summary)
+```
+
+
+## Validation
+I will use the validation set for the final performance validation. This dataset has up until now been unseen by the algorithms training the model. Although the `glm` model performed similarly to the `XGBoost` model I will only test the `XGBoost` model on the validation data. Practical use and interpretability of the glm model might require reducing the amount of features which I have not included as part of this research. 
+
+### Training the model
+I train the model on the full training dataset (train+test).
+
+```{r}
+# Train final model on all training data and test in validation set
+xgb_train_full <- nfdata_train_full %>% select(-outcome, -patN)
+xgb_valid <- nfdata_validation %>% select(-outcome, -patN)
+
+xgb_train_outcome <- as.matrix(nfdata_train_full$outcome)
+xgb_vali_outcome <- as.matrix(nfdata_validation$outcome)
+
+xgb_train_f <- xgb.DMatrix(data = as.matrix(xgb_train_full), label = xgb_train_outcome)
+xgb_vali <- xgb.DMatrix(data = as.matrix(xgb_valid), label = xgb_vali_outcome)
+
+set.seed(1536489)
+xgb_validation <- xgb.train(params = params, 
+                 data = xgb_train_f,
+                 nrounds = 325, 
+                 print_every_n = 10,
+                 early_stopping_rounds = NULL, 
+                 maximize = F)
+```
+
+### Predictions on new data
+Make predictions, create confusion matrix and plot ROC curve.
+```{r}
+# Make predictions on validation set
+xgbpred_v <- predict(xgb_validation, xgb_vali)
+xgbpreds_v <- ifelse (xgbpred_v > 0.5,1,0)
+
+cfm_v <- confusionMatrix (as.factor(xgbpreds_v), as.factor(xgb_vali_outcome))
+cfm_v
+
+# Plot ROC curve
+pr <- prediction(predictions = xgbpred_v, labels = xgb_vali_outcome)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf,
+     colorize = TRUE,
+     print.cutoffs.at= seq(0,1,0.05),
+     text.adj=c(-0.2,1.7))
+auc_v <- performance(pr, measure = "auc")
+auc_v <- auc_v@y.values[[1]]
+auc_v
+
+# Create a summary table for validation results
+summary_v <- tribble( ~Model, ~Accuracy, ~"95% CI Lower", ~"95% CI Upper", ~AUC, 
+                    "Validation", cfm_v$overall[[1]], cfm_v$overall[[3]], cfm_v$overall[[4]], auc_v)
+
+summary_v
+```
+
+The accuracy in predicting lack of treatment improvement is `r cfm_v$overall[[1]]` with an AUC of `r auc_v` on the ROC curve. These are not stellar results, but in line with what could be expected in this dataset. More interesting is how this model can be applied to clinical practice in helping therapists understand which items or dimensions that are important to improve together with the patients. 
+
+## Model explanation
+For a machine learning model being applied to this dataset, explaining the model and the results is crucial. To try to visualize how the model makes predictions I will first visualize the global feature effects before I present visualizations to help understand individual patient predictions.
+
+### Examine results
+First, I will take a look at how the model have performed in terms of prediction/probability and calculate how confident the model was in the predictions as the distance from the prediction center (0.5), in percentage.
+```{r}
+# Create a table of predictions, probability from model, confidence in prediction (in percent) and outcome.
+preds_v <- tibble("prediction" = xgbpreds_v,
+                  "probability" = xgbpred_v,
+                  "confidence" = abs(xgbpred_v/0.5 -1)*100,
+                  "y" = xgb_vali_outcome,
+                  "correct" = ifelse(xgbpreds_v == xgb_vali_outcome, 1, 0))
+
+pander(head(preds_v, 20))
+```
+
+The model seems to have made wrong predictions despite relatively high confidence in some instances. Let's plot the confidence levels versus right and wrong predictions. 
+```{r}
+preds_v %>% ggplot(aes(correct, confidence, color = correct)) + 
+  geom_jitter() +
+  geom_vline(xintercept = 0.5) +
+  scale_x_discrete(labels = NULL) + 
+  labs(x = "") +
+  annotate("text", x = 0, y =  -3, label = "Predicted wrong") +
+  annotate("text", x = 1, y =  -3, label = "Predicted right") +
+  coord_cartesian(ylim = c(0, 100), clip = "off") +
+  theme_minimal()
+```
+
+The observation seems to hold true, it's not until over 75% confidence that the distribution of confidence versus right predictions seems to deviate from the wrong predictions. 
+
+We can also examine the distribution of predictions using a density plot from the `lares` library.
+```{r}
+# Density plot of predictions
+mplot_density(tag = xgb_vali_outcome, 
+              score = xgbpred_v, 
+              subtitle = "Distribution of predictions in XGBoost model")
+```
+
+Ideally the density plot should have minimal overlap and the cumulative curves should be well separated. As we can observe there are quite a bit of overlap in the distribution from this model indicating that the model misclassifies
+many patients. 
+
+### SHAP global feature importance
+The top 10 model feature importance. This plot shows the relative impact on model prediction of each feature for each observation (patient). 
+```{r}
+if(!require(SHAPforxgboost)) install.packages("SHAPforxgboost", repos = "http://cran.us.r-project.org")
+
+# Validation set: SHAP values and ranked features by mean|SHAP|
+if(!require(SHAPforxgboost)) install.packages("SHAPforxgboost", repos = "http://cran.us.r-project.org")
+shap_values_v <- shap.values(xgb_model = xgb_validation, X_train = as.matrix(xgb_valid))
+
+# Validation set: Ranked features by mean |SHAP|
+shap_values_v$mean_shap_score
+
+# Validation set: Calculate SHAP values and plot summary
+shap_long_v <- shap.prep(xgb_model = xgb_validation, X_train = as.matrix(xgb_valid), top_n = 10)
+shap.plot.summary(shap_long_v, x_bound = 1.5, dilute = 1)
+```
+
+As we see in the plot above the trend for item 11 is the most important feature, not surprisingly. High values for the trend (indicating rising values over the three sessions) is pushing the predictions in the negative direction (towards predicting no treatment effect) and low values are pushing the predictions in the positive direction. The second most important feature is the reported level of item 11 in session 3. Somewhat counter intuitively this has opposite polarity of the trend, meaning higher values push model towards predicting treatment effect and lower values towards no treatment effect. This is probably a result of the outcome labeling process. Patients with very low initial scores on item 11 have less probability of getting an even lower score in the final session and thus less probability of being labeled with treatment effect. This is a flaw in the outcome labeling due to using a single item as outcome label and is noted as a bias to reduce in future work. 
+
+The rest of the features have more or less dichotomous effects, but we can see a mixed effect on individual observations, e.g. for the feature X.10_sd where a low value apparently can push the prediction any of the two ways for individual patients. 
+
+The most interesting and important items are 25, 17, 28 and 27. Let's take a look at these items to see if that makes sense.
+```{r}
+# Inspecting items 25, 17, 28 and 27
+pander(item_df[c(25,17,28,27), c(1,3)])
+```
+
+Since item 11 score in session 3 and trend unsurprisingly have large impact on prediction it is worth to examine these a bit further.
+```{r}
+# Exploring the impact of item 11 features in model
+g1 <- shap.plot.dependence(data_long = shap_long_v,
+                           x = 'X.11_3.',
+                           y = 'X.11_3.',
+                           color_feature = 'X.11_3.') +
+  geom_hline(yintercept = 0, linetype="dashed", color = "red") +
+  ylim(-1.6, 1.6) +
+  ggtitle("(A) SHAP values of item 11 vs. feature values of item 11")
+
+g2 <- shap.plot.dependence(data_long = shap_long_v,
+                           x = 'X.11_trend',
+                           y = 'X.11_trend',
+                           color_feature = 'X.11_trend') +
+  geom_hline(yintercept = 0, linetype="dashed", color = "red") +
+  ylim(-1.6, 1.6) +
+  ggtitle("(B) SHAP values of item 11 trend vs. feature values of item 11 trend")
+
+gridExtra::grid.arrange(g1, g2, ncol = 2)
+```
+
+The impact of the trend is clearly the largest of the two features. Low values have a high positive impact and high values have a high negative impact. For the session 3 score for item 11 the most extreme low scores clearly have the highest impact.
+
+### SHAP patient feature importance
+The impact of features on model prediction on a patient level is highly interesting and vital for clinical application. Let's start by looking at the 40 first patients and see how feature impact varies. I will only plot the top 7 features to include the ones I consider most clinically relevant. 
+```{r}
+# Force plot for the 40 first patients. Showing top 7 features by importance
+plot_data <- shap.prep.stack.data(shap_contrib = shap_values_v$shap_score[1:40], top_n = 7)
+shap.plot.force_plot(plot_data, zoom_in = FALSE, y_parent_limit = c(-2,2))
+```
+
+To be able to visualize the effects on an individual level I create a function that uses the `waterfall` library to make a waterfall plot. 
+```{r}
+if(!require(ggalluvial)) install.packages("ggalluvial", repos = "http://cran.us.r-project.org")
+if(!require(waterfalls)) install.packages("waterfalls", repos = "http://cran.us.r-project.org")
+
+plot_waterfall <- function(x, top_n = NULL){
+  if (is.null(top_n)) top_n <- dim(x)[2]
+  shap_long <- pivot_longer(shap_values_v$shap_score[x,], 
+                            cols = 1:ncol(shap_values_v$shap_score), 
+                            names_to = "feature", 
+                            values_to = "value")
+  bias <- tibble(feature = "bias", value = shap_values_v$BIAS0$BIAS)
+  shap_long <- shap_long %>% bind_rows(bias) %>% 
+    select(feature, value) %>%
+    arrange(desc(abs(value))) %>%
+    head(top_n)
+  
+  shap_long %>% 
+  mutate(value = round(value, 2)) %>%
+  waterfall() +
+    ggtitle(paste("Waterfall plot for patient", x, "in validation set")) +
+    xlab("Feature") +
+    ylab("Impact on prediction") +
+    theme(axis.text=element_text(size=8)) +
+    theme_hc()
+}
+```
+
+I can now visualize any patient using this simple function. Let's take a look at a few random patients.
+```{r waterfall plots, fig.height = 4, fig.width = 6.5}
+plot_waterfall(122, 10)
+plot_waterfall(222, 10)
+plot_waterfall(322, 10)
+plot_waterfall(422, 10)
+```
+
+Features are ordered by their magnitude of impact, showing top 10 features. The most important features varies between patients. A new feature can be observed in these plots, the bias. This is similar to the intercept in a linear model. Clearly, the trend of item 11 has a large impact on these predictions. For patient 122 the negative impact of the trend is so high that it can not be outweighed by the other features. For patient 222 the positive impact of the item 11 trend is substantial, but it is nearly cancelled by the remaining features. For patient 322 the negative impact of item 11 trend is less than the bias, but other features contribute to the negative prediction. For patient 422 the negative impact of item 11 trend and bias is outweighed by positive impacts from other features.
+
+# Conclusions and future work
+Training machine learning models on the Norse Feedback dataset has been both challenging and rewarding. Handling raw real world data required me to clean and wrangle data and think carefully through datastructure for further analysis. A particular challenge was presented in the missing labeling of the dataset. I am not entirely confident that I have found the best approach to labeling the data, but as an initial exercise and demonstration of machine learning modeling on this dataset it will suffice. I will continue to explore other labeling options and lean towards using an ensemble technique to label data more representatively across all patients, also those that start with low values on item 11. 
+
+Another challenge was the missingness of data in the dataset that became evident as the data was pivoted into a wide/matrix format. This problem introduced me to the theories underlying handling missing data and I chose to impute 0s for missing values to be able to train the models since data is mainly missing by design. The `XGBoost` algorithm is robust when it comes to missing values and would have been able to create a model without any imputation.
+
+Finally, a goal of this project was to train a model that was interpretable and explainable. Fortunately various libraries exist for R that assist in visualizing and explaining data from a `XGBoost` model. I have experimented with various visualizations to give readers an intuition of how the model makes predictions.  
+
+The final validation results of the trained `XGBoost` model are not very impressive in terms of accuracy (`r cfm_v$overall[[1]]`) and ROC AUC (`r auc_v`), but the model could provide clinical insights that might help therapists in their work with individual patients. Future work may improve model performance.
+
+
